@@ -4,10 +4,11 @@ use std::{thread, time};
 
 
 use home_assistant::{get_tv_state, update_tv_state};
-use hue::get_syncbox_execution;
+use hue::get_syncbox_state;
 
 
 // FROM: https://stackoverflow.com/a/26390046
+mod error;
 mod home_assistant;
 mod hue;
 mod request;
@@ -15,9 +16,9 @@ mod request;
 
 fn main()
 {
-	let mut syncbox_state: Option<bool> = match get_tv_state()
+	let mut known_syncbox_state: Option<bool> = match get_tv_state()
 	{
-		Ok(tv_state) => Some(tv_state.state == "on"),
+		Ok(tv_state) => Some(tv_state),
 		Err(error) =>
 		{
 			println!("{}", error);
@@ -27,25 +28,23 @@ fn main()
 
 	loop
 	{
-		match get_syncbox_execution()
+		match get_syncbox_state()
 		{
 			Err(error) => println!("{}", error),
-			Ok(syncbox_execution)
-			=>
+			Ok(current_syncbox_state) =>
 			{
-				// println!("syncbox_execution.hdmiActive: {}", syncbox_execution.hdmiActive);
-				if syncbox_state.is_none_or(|syncbox_state| syncbox_state != syncbox_execution.hdmiActive)
+				if known_syncbox_state.is_none_or(|known_syncbox_state| known_syncbox_state != current_syncbox_state)
 				{
-					match update_tv_state(syncbox_execution.hdmiActive)
+					match update_tv_state(current_syncbox_state)
 					{
 						Some(error) => println!("{}", error),
-						None => syncbox_state = Some(syncbox_execution.hdmiActive),
+						None => known_syncbox_state = Some(current_syncbox_state),
 					} 
 				}
 			},
 		};
 
-		let sleep_time: std::time::Duration = time::Duration::from_millis(2000);
+		static sleep_time: std::time::Duration = time::Duration::from_millis(2000);
 		thread::sleep(sleep_time);
 	}
 }

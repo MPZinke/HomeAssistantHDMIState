@@ -11,75 +11,73 @@
 ***********************************************************************************************************************/
 
 
-#[allow(dead_code, non_snake_case)]
-mod entity;
+use std::io::ErrorKind;
 
 
-use std::io::{Error, ErrorKind};
+use serde_json;
 
 
-use crate::request::*;
-pub use crate::home_assistant::entity::InputBooleanEntity;
+use crate::error::Error;
+use crate::error::Error::{JSONError, RequestError};
+use crate::error::JSONError::{DecodeError, KeyError};
+use crate::error::RequestError::{ReqwestTextError, StatusError};
+use crate::request::{make_get_request, make_post_request};
 
 
 static HOME_ASSISTANT_URL: &str = "http://homeassistant.local:8123/api/states/input_boolean.tv_state";
-static HOME_ASSISTANT_AUTH: &str = concat!("Bearer ", env!("HOME_ASSISTANT_TOKEN"));
+static HOME_ASSISTANT_AUTH: &str = env!("HOME_ASSISTANT_TOKEN");
 
 
-pub fn get_tv_state() -> Result<InputBooleanEntity, RequestError>
+static STATE_ON: &str = r#"{"state": "on"}"#;
+static STATE_OFF: &str = r#"{"state": "off"}"#;
+
+
+pub fn get_tv_state() -> Result<bool, Error>
 {
-	let client: reqwest::blocking::Client = match get_request_client(&HOME_ASSISTANT_AUTH)
-	{
-		Ok(client) => client,
-		Err(error) => return Err(error),
-	};
-
-	let response = match client.get(HOME_ASSISTANT_URL).send()
+	let response = match make_get_request(&HOME_ASSISTANT_URL, &HOME_ASSISTANT_AUTH)
 	{
 		Ok(response) => response,
-		Err(error) => return Err(RequestError::ReqwestError(error)),
+		Err(error) => return Err(RequestError(error)),
 	};
 
 	let response_body = match response.text()
 	{
 		Ok(response_body) => response_body,
-		Err(error) => return Err(RequestError::ReqwestTextError(error)),
+		Err(error) => return Err(RequestError(ReqwestTextError(error))),
 	};
 
-	return match serde_json::from_str(&response_body)
+	let tv_state_entity: serde_json::Value = match serde_json::from_str::<serde_json::Value>(&response_body)
 	{
-		Ok(tv_state) => Ok(tv_state),
-		Err(error) => Err(RequestError::SerdeJsonError(error)),
+		Ok(tv_state_entity) => tv_state_entity,
+		Err(error) => return Err(JSONError(DecodeError(error))),
+	};
+
+	return match &tv_state_entity["state"]
+	{
+		serde_json::Value::String(tv_state_state) => Ok(tv_state_state == "on"),
+		_ => Err(JSONError(KeyError(std::io::Error::new(ErrorKind::Other, "Bad JSON format.")))),
 	};
 }
 
 
-pub fn update_tv_state(hdmi_is_active: bool) -> Option<RequestError>
+pub fn update_tv_state(hdmi_is_active: bool) -> Option<Error>
 {
-	let client: reqwest::blocking::Client = match get_request_client(&HOME_ASSISTANT_AUTH)
-	{
-		Ok(client) => client,
-		Err(error) => return Some(error),
-	};
-
 	let body: &str;
 	if hdmi_is_active
 	{
-		body = r#"{"state": "on"}"#;
-		println!("HDMI is active");
+		body = &STATE_ON;
+		println!(r#"Setting TV state "on""#);
 	}
 	else
 	{
-		body = r#"{"state": "off"}"#;
-		println!("HDMI is inactive");
+		body = &STATE_OFF;
+		println!(r#"Setting TV state "off""#);
 	}
 
-	let response = match client.post(HOME_ASSISTANT_URL)
-	.body(body)
-	.send()
+	let response = match make_post_request(&HOME_ASSISTANT_URL, &HOME_ASSISTANT_AUTH, &body)
 	{
 		Ok(response) => response,
-		Err(error) => return Some(RequestError::ReqwestError(error)),
+		Err(error) => return Some(RequestError(error)),
 	};
 
 	if response.status().is_success()
@@ -87,5 +85,5 @@ pub fn update_tv_state(hdmi_is_active: bool) -> Option<RequestError>
 		return None;
 	}
 
-	return Some(RequestError::StatusError(Error::new(ErrorKind::Other, format!("Status Code: {}", response.status()))));
+	return Some(RequestError(StatusError(std::io::Error::new(ErrorKind::Other, format!("Status Code: {}", response.status())))));
 }
